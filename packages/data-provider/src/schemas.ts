@@ -396,7 +396,7 @@ export const anthropicSettings = {
     default: 1 as const,
   },
   promptCache: {
-    default: true as const,
+    default: false as const,
   },
   thinking: {
     default: true as const,
