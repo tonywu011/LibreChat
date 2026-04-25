@@ -4,6 +4,7 @@ const { logger } = require('@librechat/data-schemas');
 const { Callback, ToolEndHandler, formatAgentMessages } = require('@librechat/agents');
 const {
   EModelEndpoint,
+  ContentTypes,
   ResourceType,
   PermissionBits,
   hasPermissions,
@@ -94,6 +95,49 @@ function createToolLoader(signal, definitionsOnly = true) {
  */
 function convertToInternalMessages(input) {
   return convertInputToMessages(input);
+}
+
+/**
+ * Restores `reasoning_content` in `additional_kwargs` for AIMessages that correspond to
+ * assistant payload messages containing THINK content parts. Required for providers like
+ * DeepSeek in thinking mode, where `reasoning_content` must be passed back to the API.
+ *
+ * @param {Array<Object>} payload - The formatted messages passed to formatAgentMessages
+ * @param {Array<import('@langchain/core/messages').BaseMessage>} messages - LangChain messages from formatAgentMessages
+ */
+function restoreReasoningContent(payload, messages) {
+  let resultIdx = 0;
+  for (const payloadMsg of payload) {
+    if (resultIdx >= messages.length) {
+      break;
+    }
+    if (payloadMsg.role !== 'assistant') {
+      resultIdx++;
+      continue;
+    }
+
+    const thinkText = Array.isArray(payloadMsg.content)
+      ? payloadMsg.content
+          .filter((p) => p != null && p.type === ContentTypes.THINK)
+          .map((p) => p[ContentTypes.THINK] || p.think || '')
+          .filter(Boolean)
+          .join('')
+      : '';
+
+    const primaryMsg = messages[resultIdx];
+    if (thinkText && primaryMsg != null && primaryMsg._getType() === 'ai') {
+      primaryMsg.additional_kwargs.reasoning_content = thinkText;
+    }
+
+    while (resultIdx < messages.length) {
+      const msgType = messages[resultIdx]._getType();
+      if (msgType === 'ai' || msgType === 'tool') {
+        resultIdx++;
+      } else {
+        break;
+      }
+    }
+  }
 }
 
 /**
@@ -490,6 +534,7 @@ const createResponse = async (req, res) => {
       indexTokenCountMap,
       summary: initialSummary,
     } = formatAgentMessages(allMessages, {}, toolSet);
+    restoreReasoningContent(allMessages, formattedMessages);
 
     // Create tracker for streaming or aggregator for non-streaming
     const tracker = actuallyStreaming ? createResponseTracker() : null;

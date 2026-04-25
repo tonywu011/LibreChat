@@ -59,6 +59,55 @@ const db = require('~/models');
 
 const loadAgent = (params) => loadAgentFn(params, { getAgent: db.getAgent, getMCPServerTools });
 
+/**
+ * Restores `reasoning_content` in `additional_kwargs` for AIMessages that correspond to
+ * assistant payload messages containing THINK content parts. This is required for providers
+ * like DeepSeek in thinking mode, where `reasoning_content` from a previous turn must be
+ * passed back to the API in subsequent calls.
+ *
+ * `formatAgentMessages` strips THINK parts without preserving them in `additional_kwargs`,
+ * so we re-correlate them here by walking both arrays in parallel. Non-assistant payload
+ * messages map 1:1 to result messages; assistant payload messages map to one or more
+ * contiguous AIMessages and ToolMessages in the result.
+ *
+ * @param {Array<Object>} payload - The formatted messages (plain objects) passed to formatAgentMessages
+ * @param {Array<import('@langchain/core/messages').BaseMessage>} messages - LangChain messages from formatAgentMessages
+ */
+function restoreReasoningContent(payload, messages) {
+  let resultIdx = 0;
+  for (const payloadMsg of payload) {
+    if (resultIdx >= messages.length) {
+      break;
+    }
+    if (payloadMsg.role !== 'assistant') {
+      resultIdx++;
+      continue;
+    }
+
+    const thinkText = Array.isArray(payloadMsg.content)
+      ? payloadMsg.content
+          .filter((p) => p != null && p.type === ContentTypes.THINK)
+          .map((p) => p[ContentTypes.THINK] || p.think || '')
+          .filter(Boolean)
+          .join('')
+      : '';
+
+    const primaryMsg = messages[resultIdx];
+    if (thinkText && primaryMsg != null && primaryMsg._getType() === 'ai') {
+      primaryMsg.additional_kwargs.reasoning_content = thinkText;
+    }
+
+    while (resultIdx < messages.length) {
+      const msgType = messages[resultIdx]._getType();
+      if (msgType === 'ai' || msgType === 'tool') {
+        resultIdx++;
+      } else {
+        break;
+      }
+    }
+  }
+}
+
 class AgentClient extends BaseClient {
   constructor(options = {}) {
     super(null, options);
@@ -748,6 +797,7 @@ class AgentClient extends BaseClient {
         summary: initialSummary,
         boundaryTokenAdjustment,
       } = formatAgentMessages(payload, this.indexTokenCountMap, toolSet);
+      restoreReasoningContent(payload, initialMessages);
       if (boundaryTokenAdjustment) {
         logger.debug(
           `[AgentClient] Boundary token adjustment: ${boundaryTokenAdjustment.original} → ${boundaryTokenAdjustment.adjusted} (${boundaryTokenAdjustment.remainingChars}/${boundaryTokenAdjustment.totalChars} chars)`,
