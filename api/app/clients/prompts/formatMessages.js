@@ -237,9 +237,138 @@ const formatAgentMessages = (payload) => {
   return messages;
 };
 
+/**
+ * Extracts reasoning content string from THINK parts in a message's content array.
+ * @param {Array} contentParts - Content parts array from a message
+ * @returns {string|null} - Concatenated reasoning text, or null if no reasoning present
+ */
+function extractReasoningContent(contentParts) {
+  if (!Array.isArray(contentParts)) {
+    return null;
+  }
+  const thinkParts = contentParts.filter(
+    (part) => part && (part.type === ContentTypes.THINK || part.type === 'think'),
+  );
+  if (thinkParts.length === 0) {
+    return null;
+  }
+  return (
+    thinkParts
+      .map((part) => part.think || part[ContentTypes.THINK] || '')
+      .join('\n')
+      .trim() || null
+  );
+}
+
+/**
+ * Adds `reasoning_content` to `additional_kwargs` on formatted AIMessages that
+ * correspond to payload assistant messages with THINK content parts.
+ *
+ * DeepSeek (and potentially other providers) require that `reasoning_content`
+ * from previous assistant responses be passed back to the API in subsequent
+ * multi-turn conversations when thinking mode is enabled.
+ *
+ * @param {Array<Object>} payload - Original message payload before formatting
+ * @param {Array<BaseMessage>} formattedMessages - Messages returned by formatAgentMessages
+ * @returns {Array<BaseMessage>} - The formatted messages, mutated in place
+ */
+function addReasoningContentToMessages(payload, formattedMessages) {
+  // Build an index-based lookup of reasoning content per payload message
+  const reasoningByPayloadIndex = payload.map((msg) => {
+    if (!msg || msg.role !== 'assistant') {
+      return null;
+    }
+    return extractReasoningContent(msg.content);
+  });
+
+  if (reasoningByPayloadIndex.every((r) => !r)) {
+    return formattedMessages;
+  }
+
+  // Walk through payload and formatted messages in parallel.
+  // Each non-assistant payload message maps to exactly one formatted message.
+  // Each assistant payload message maps to a sequence of AIMessage(s) + ToolMessage(s).
+  // We track groups by knowing that formatAssistantMessage produces:
+  //   - AIMessage for each TEXT+tool_call_ids part
+  //   - ToolMessage for each TOOL_CALL part
+  //   - AIMessage for final TEXT content parts
+  let payloadIdx = 0;
+  let formattedIdx = 0;
+
+  while (payloadIdx < payload.length && formattedIdx < formattedMessages.length) {
+    const payloadMsg = payload[payloadIdx];
+    const reasoning = reasoningByPayloadIndex[payloadIdx];
+    const fmsg = formattedMessages[formattedIdx];
+    const msgType = fmsg && typeof fmsg._getType === 'function' ? fmsg._getType() : null;
+
+    if (!payloadMsg || payloadMsg.role !== 'assistant') {
+      // Non-assistant: 1 payload message → 1 formatted message
+      payloadIdx++;
+      formattedIdx++;
+      continue;
+    }
+
+    // Assistant message: count how many formatted messages it produced
+    // by analyzing the content structure.
+    let aimessageCount = 0;
+    let toolMessageCount = 0;
+    if (Array.isArray(payloadMsg.content)) {
+      let lastToolCall = false;
+      for (const part of payloadMsg.content) {
+        if (!part) {
+          continue;
+        }
+        if (part.type === ContentTypes.TEXT && part.tool_call_ids) {
+          aimessageCount++;
+          lastToolCall = true;
+        } else if (part.type === ContentTypes.TOOL_CALL) {
+          toolMessageCount++;
+          lastToolCall = true;
+        } else if (part.type === ContentTypes.THINK) {
+          // THINK is skipped, does not produce a formatted message
+        } else if (part.type === ContentTypes.ERROR || part.type === ContentTypes.AGENT_UPDATE) {
+          // ERROR/AGENT_UPDATE skipped
+        } else {
+          lastToolCall = false;
+        }
+      }
+      // If there are accumulated TEXT parts without tool_call_ids, they produce one AIMessage
+      const hasFinalTextContent = payloadMsg.content.some(
+        (part) =>
+          part &&
+          part.type === ContentTypes.TEXT &&
+          !part.tool_call_ids,
+      );
+      if (hasFinalTextContent) {
+        aimessageCount++;
+      }
+    }
+
+    // Add reasoning_content to all AIMessages in this group
+    const totalFormattedForMsg = aimessageCount + toolMessageCount;
+    for (let i = 0; i < totalFormattedForMsg && formattedIdx < formattedMessages.length; i++) {
+      const current = formattedMessages[formattedIdx];
+      const currentType = current && typeof current._getType === 'function' ? current._getType() : null;
+      if (reasoning && currentType === 'ai') {
+        if (!current.additional_kwargs) {
+          current.additional_kwargs = {};
+        }
+        current.additional_kwargs.reasoning_content = reasoning;
+      }
+      formattedIdx++;
+    }
+
+    payloadIdx++;
+  }
+
+  return formattedMessages;
+}
+
 module.exports = {
   formatMessage,
   formatFromLangChain,
   formatAgentMessages,
   formatLangChainMessages,
+  extractReasoningContent,
+  addReasoningContentToMessages,
 };

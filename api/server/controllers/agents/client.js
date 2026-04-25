@@ -51,6 +51,7 @@ const {
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
 const { encodeAndFormat } = require('~/server/services/Files/images/encode');
 const { createContextHandlers } = require('~/app/clients/prompts');
+const { addReasoningContentToMessages } = require('~/app/clients/prompts/formatMessages');
 const { resolveConfigServers } = require('~/server/services/MCP');
 const { getMCPServerTools } = require('~/server/services/Config');
 const BaseClient = require('~/app/clients/BaseClient');
@@ -748,6 +749,10 @@ class AgentClient extends BaseClient {
         summary: initialSummary,
         boundaryTokenAdjustment,
       } = formatAgentMessages(payload, this.indexTokenCountMap, toolSet);
+
+      // Preserve reasoning_content for providers (e.g. DeepSeek) that require it
+      // to be passed back in multi-turn conversations when thinking mode is enabled.
+      addReasoningContentToMessages(payload, initialMessages);
       if (boundaryTokenAdjustment) {
         logger.debug(
           `[AgentClient] Boundary token adjustment: ${boundaryTokenAdjustment.original} → ${boundaryTokenAdjustment.adjusted} (${boundaryTokenAdjustment.remainingChars}/${boundaryTokenAdjustment.totalChars} chars)`,

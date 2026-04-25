@@ -43,6 +43,7 @@ const {
 const { getModelsConfig } = require('~/server/controllers/ModelController');
 const { logViolation } = require('~/cache');
 const db = require('~/models');
+const { addReasoningContentToMessages } = require('~/app/clients/prompts/formatMessages');
 
 /**
  * Creates a tool loader function for the agent.
@@ -400,6 +401,8 @@ const OpenAIChatCompletionController = async (req, res) => {
       indexTokenCountMap,
       summary: initialSummary,
     } = formatAgentMessages(openaiMessages, {}, toolSet);
+
+    addReasoningContentToMessages(openaiMessages, formattedMessages);
 
     /**
      * Create a simple handler that processes data

@@ -52,6 +52,7 @@ const {
 const { getModelsConfig } = require('~/server/controllers/ModelController');
 const { logViolation } = require('~/cache');
 const db = require('~/models');
+const { addReasoningContentToMessages } = require('~/app/clients/prompts/formatMessages');
 
 /**
  * Creates a tool loader function for the agent.
@@ -490,6 +491,8 @@ const createResponse = async (req, res) => {
       indexTokenCountMap,
       summary: initialSummary,
     } = formatAgentMessages(allMessages, {}, toolSet);
+
+    addReasoningContentToMessages(allMessages, formattedMessages);
 
     // Create tracker for streaming or aggregator for non-streaming
     const tracker = actuallyStreaming ? createResponseTracker() : null;
