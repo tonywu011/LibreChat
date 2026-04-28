@@ -28,6 +28,7 @@ COPY --chown=node:node client/package.json ./client/package.json
 COPY --chown=node:node packages/data-provider/package.json ./packages/data-provider/package.json
 COPY --chown=node:node packages/data-schemas/package.json ./packages/data-schemas/package.json
 COPY --chown=node:node packages/api/package.json ./packages/api/package.json
+COPY --chown=node:node patches/ ./patches/
 
 RUN \
     # Allow mounting of these files, which have no default
@@ -39,12 +40,17 @@ RUN \
     npm config set fetch-retry-mintimeout 15000 ; \
     npm ci --no-audit
 
+# Patch @librechat/agents to include reasoning_content for all assistant messages
+RUN node patches/patch-reasoning-content.js
+
 COPY --chown=node:node . .
 
 RUN \
     # React client build with configurable memory
     NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run frontend; \
     npm prune --production; \
+    # Re-apply patch after prune (prune may reorganize node_modules)
+    node patches/patch-reasoning-content.js; \
     npm cache clean --force
 
 # Node API setup

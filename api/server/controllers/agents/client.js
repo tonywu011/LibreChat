@@ -86,23 +86,29 @@ function restoreReasoningContent(payload, messages) {
 
     const thinkText = Array.isArray(payloadMsg.content)
       ? payloadMsg.content
-          .filter((p) => p != null && p.type === ContentTypes.THINK)
-          .map((p) => p[ContentTypes.THINK] || p.think || '')
+          .filter((p) => p != null && (p.type === ContentTypes.THINK || p.type === 'reasoning_content' || p.type === 'thinking'))
+          .map((p) => p[ContentTypes.THINK] || p.think || (p.type === 'reasoning_content' ? (p.text || p.reasoning_content || '') : '') || '')
           .filter(Boolean)
           .join('')
       : '';
 
-    const primaryMsg = messages[resultIdx];
-    if (thinkText && primaryMsg != null && primaryMsg._getType() === 'ai') {
-      primaryMsg.additional_kwargs.reasoning_content = thinkText;
-    }
-
+    const startIdx = resultIdx;
     while (resultIdx < messages.length) {
       const msgType = messages[resultIdx]._getType();
       if (msgType === 'ai' || msgType === 'tool') {
         resultIdx++;
       } else {
         break;
+      }
+    }
+    const endIdx = resultIdx;
+
+    if (thinkText) {
+      for (let i = startIdx; i < endIdx; i++) {
+        const msg = messages[i];
+        if (msg._getType() === 'ai') {
+          msg.additional_kwargs.reasoning_content = thinkText;
+        }
       }
     }
   }
