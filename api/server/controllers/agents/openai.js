@@ -45,6 +45,55 @@ const { logViolation } = require('~/cache');
 const db = require('~/models');
 
 /**
+ * Restores `reasoning_content` in `additional_kwargs` for AIMessages that correspond to
+ * assistant payload messages containing THINK content parts. Required for providers like
+ * DeepSeek in thinking mode, where `reasoning_content` must be passed back to the API.
+ *
+ * @param {Array<Object>} payload - The formatted messages passed to formatAgentMessages
+ * @param {Array<import('@langchain/core/messages').BaseMessage>} messages - LangChain messages from formatAgentMessages
+ */
+function restoreReasoningContent(payload, messages) {
+  let resultIdx = 0;
+  for (const payloadMsg of payload) {
+    if (resultIdx >= messages.length) {
+      break;
+    }
+    if (payloadMsg.role !== 'assistant') {
+      resultIdx++;
+      continue;
+    }
+
+    const thinkText = Array.isArray(payloadMsg.content)
+      ? payloadMsg.content
+          .filter((p) => p != null && (p.type === 'think' || p.type === 'reasoning_content' || p.type === 'thinking'))
+          .map((p) => p.think || p.text || p.reasoning_content || '')
+          .filter(Boolean)
+          .join('')
+      : '';
+
+    const startIdx = resultIdx;
+    while (resultIdx < messages.length) {
+      const msgType = messages[resultIdx]._getType();
+      if (msgType === 'ai' || msgType === 'tool') {
+        resultIdx++;
+      } else {
+        break;
+      }
+    }
+    const endIdx = resultIdx;
+
+    if (thinkText) {
+      for (let i = startIdx; i < endIdx; i++) {
+        const msg = messages[i];
+        if (msg._getType() === 'ai') {
+          msg.additional_kwargs.reasoning_content = thinkText;
+        }
+      }
+    }
+  }
+}
+
+/**
  * Creates a tool loader function for the agent.
  * @param {AbortSignal} signal - The abort signal
  * @param {boolean} [definitionsOnly=true] - When true, returns only serializable
@@ -400,6 +449,7 @@ const OpenAIChatCompletionController = async (req, res) => {
       indexTokenCountMap,
       summary: initialSummary,
     } = formatAgentMessages(openaiMessages, {}, toolSet);
+    restoreReasoningContent(openaiMessages, formattedMessages);
 
     /**
      * Create a simple handler that processes data
